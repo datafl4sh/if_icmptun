@@ -60,7 +60,18 @@
 #include <netinet/ip6.h>
 #endif
 
+#include <machine/in_cksum.h>
+
 #include "if_icmptun.h"
+
+static void
+in_icmptun_set_running(struct icmptun_softc *sc)
+{
+	if (in_localip(sc->icmptun_iphdr->ip_src))
+		ICMPTUN2IFP(sc)->if_drv_flags |= IFF_DRV_RUNNING;
+	else
+		ICMPTUN2IFP(sc)->if_drv_flags &= ~IFF_DRV_RUNNING;
+}
 
 int
 in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
@@ -79,12 +90,12 @@ in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
 
 		/* sanity checks */
 		if (src->sin_family != dst->sin_family ||
-		    src->sin_family != AF_INET ||
-		    src->sin_len != dst->sin_len ||
-		    src->sin_len != sizeof(*src))
+			src->sin_family != AF_INET ||
+			src->sin_len != dst->sin_len ||
+			src->sin_len != sizeof(*src))
 			break;
 		if (src->sin_addr.s_addr == INADDR_ANY ||
-		    dst->sin_addr.s_addr == INADDR_ANY) {
+			dst->sin_addr.s_addr == INADDR_ANY) {
 			error = EADDRNOTAVAIL;
 			break;
 		}
@@ -103,21 +114,22 @@ in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
 			error = 0;
 			break;
 		}
-		ip = malloc(sizeof(*ip), M_ICMPTUN, M_WAITOK | M_ZERO);
+		ip = malloc(sizeof(struct ip), M_ICMPTUN, M_WAITOK | M_ZERO);
 		ip->ip_src.s_addr = src->sin_addr.s_addr;
 		ip->ip_dst.s_addr = dst->sin_addr.s_addr;
 		if (sc->icmptun_family != 0) {
 			/* Detach existing tunnel first */
-			CK_LIST_REMOVE(sc, srchash);
-			CK_LIST_REMOVE(sc, chain);
+			//CK_LIST_REMOVE(sc, srchash);
+			//CK_LIST_REMOVE(sc, chain);
 			ICMPTUN_WAIT();
-			free(sc->icmptun_hdr, M_ICMPTUN);
+			//free(sc->icmptun_hdr, M_ICMPTUN);
 			/* XXX: should we notify about link state change? */
 		}
 		sc->icmptun_family = AF_INET;
 		sc->icmptun_iphdr = ip;
+		printf("sc->icmptun_iphdr: %p\n", ip);
 		//in_gif_attach(sc);
-		//in_gif_set_running(sc);
+		in_icmptun_set_running(sc);
 		break;
 	case SIOCGIFPSRCADDR:
 	case SIOCGIFPDSTADDR:
@@ -130,7 +142,7 @@ in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
 		src->sin_family = AF_INET;
 		src->sin_len = sizeof(*src);
 		src->sin_addr = (cmd == SIOCGIFPSRCADDR) ?
-		    sc->icmptun_iphdr->ip_src: sc->icmptun_iphdr->ip_dst;
+			sc->icmptun_iphdr->ip_src: sc->icmptun_iphdr->ip_dst;
 		error = prison_if(curthread->td_ucred, (struct sockaddr *)src);
 		if (error != 0)
 			memset(src, 0, sizeof(*src));
@@ -145,7 +157,9 @@ in_icmptun_output(struct ifnet *ifp, struct mbuf *m, int proto, uint8_t ecn)
 	struct icmptun_softc *sc = ifp->if_softc;
 	struct icmptunip *itih;
 	int len;
-    
+	
+	u_short payload_csum = in_cksum(m, m->m_pkthdr.len);
+
 	/* prepend new IP header */
 	MPASS(in_epoch(net_epoch_preempt));
 	len = sizeof(struct icmptunip);
@@ -158,17 +172,24 @@ in_icmptun_output(struct ifnet *ifp, struct mbuf *m, int proto, uint8_t ecn)
 
 	MPASS(sc->icmptun_family == AF_INET);
 	bcopy(sc->icmptun_iphdr, &itih->tun_ip, sizeof(struct ip));
-	//bcopy(sc->icmptun_tunhdr, itih->tun_tun, sizeof(struct icmptun));
 	
-	itih->tun_icmptun.ic_type = 8;
-    itih->tun_icmptun.ic_code = 0;
-    //itih->tun_icmptun.ic_cksum;
-    itih->tun_icmptun.ic_ident = 0x4242;
-    itih->tun_icmptun.ic_seq = 0x4242;
-	
+	itih->tun_icmptun.ic_type = 0;
+	itih->tun_icmptun.ic_code = 0;
+	itih->tun_icmptun.ic_ident = htons(1010);
+	itih->tun_icmptun.ic_seq = 0x8484;
+	itih->tun_icmptun.ic_cksum = 0;
+
+	itih->tun_icmptun.tun_ver = ICMPTUN_VERSION;
+	itih->tun_icmptun.tun_proto = htons(4);//proto;
+	itih->tun_icmptun.tun_pad = htons(ICMPTUN_ECHO_PADDING);
+	itih->tun_icmptun.tun_cksum = payload_csum;
+
+	itih->tun_icmptun.ic_cksum =
+		in_cksum_skip(m, m->m_pkthdr.len, sizeof(struct ip));
+
 	itih->tun_ip.ip_p = IPPROTO_ICMP;
-	itih->tun_ip.ip_ttl = 64;
-	itih->tun_ip.ip_len = htons(m->m_pkthdr.len) + sizeof(struct icmptun);
+	itih->tun_ip.ip_ttl = ICMPTUN_TTL;
+	itih->tun_ip.ip_len = htons(m->m_pkthdr.len);
 	itih->tun_ip.ip_tos = ecn;
 
 	return (ip_output(m, NULL, NULL, 0, NULL, NULL));

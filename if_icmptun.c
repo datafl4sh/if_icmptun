@@ -98,7 +98,7 @@ static void	icmptun_qflush(struct ifnet *);
 static int	icmptun_transmit(struct ifnet *, struct mbuf *);
 static int	icmptun_ioctl(struct ifnet *, u_long, caddr_t);
 static int	icmptun_output(struct ifnet *, struct mbuf *,
-		    const struct sockaddr *, struct route *);
+			const struct sockaddr *, struct route *);
 static void	icmptun_delete_tunnel(struct icmptun_softc *);
 
 extern struct protosw inetsw[];
@@ -110,7 +110,7 @@ vnet_icmptun_init(const void *unused __unused)
 {
 
 	V_icmptun_cloner = if_clone_simple(icmptunname, icmptun_clone_create,
-	    icmptun_clone_destroy, 0);
+		icmptun_clone_destroy, 0);
 #ifdef INET
 	//in_gre_init();
 #endif
@@ -119,7 +119,7 @@ vnet_icmptun_init(const void *unused __unused)
 #endif
 }
 VNET_SYSINIT(vnet_icmptun_init, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
-    vnet_icmptun_init, NULL);
+	vnet_icmptun_init, NULL);
 
 static void
 vnet_icmptun_uninit(const void *unused __unused)
@@ -135,35 +135,35 @@ vnet_icmptun_uninit(const void *unused __unused)
 	/* XXX: epoch_call drain */
 }
 VNET_SYSUNINIT(vnet_icmptun_uninit, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
-    vnet_icmptun_uninit, NULL);
+	vnet_icmptun_uninit, NULL);
 
 static int
 icmp_input_hook(struct mbuf **mp, int *offp, int proto)
 {
-    /* Here we determine if the packet is an actual ICMPTUN packet or if
-     * it is plain ICMP. In the former case the packet is passed to
-     * icmptun_input(), in the latter case the control is handed back to the
-     * operating system ICMP processing facilities */
+	/* Here we determine if the packet is an actual ICMPTUN packet or if
+	 * it is plain ICMP. In the former case the packet is passed to
+	 * icmptun_input(), in the latter case the control is handed back to the
+	 * operating system ICMP processing facilities */
 
-    struct mbuf *m = *mp;
-    struct ip *iph = mtod(m, struct ip *);
-    struct icmptun *itp;
-    struct ifnet *ifp;
-    int hlen = *offp;
-    int icmplen = ntohs(iph->ip_len) - *offp;
-    int ihlen = hlen + sizeof(struct icmptun);
-    int icmptunlen = ntohs(iph->ip_len) - ihlen;
-    int i;
-    u_short csum, tun_ident;
-    
-    /* Do standart ICMP validation, copy-paste from icmp_input() in
-     * netinet/ip_icmp.c */
-    if (icmplen < ICMP_MINLEN) {
+	struct mbuf *m = *mp;
+	struct ip *iph = mtod(m, struct ip *);
+	struct icmptun *itp;
+	struct ifnet *ifp;
+	int hlen = *offp;
+	int icmplen = ntohs(iph->ip_len) - *offp;
+	int ihlen = hlen + sizeof(struct icmptun);
+	int icmptunlen = ntohs(iph->ip_len) - ihlen;
+	int i;
+	u_short csum, tun_ident;
+	
+	/* Do standart ICMP validation, copy-paste from icmp_input() in
+	 * netinet/ip_icmp.c */
+	if (icmplen < ICMP_MINLEN) {
 		//ICMPSTAT_INC(icps_tooshort);
 		goto freeit;
-    }
-    
-    i = hlen + min(icmplen, ICMP_ADVLENMIN);
+	}
+	
+	i = hlen + min(icmplen, ICMP_ADVLENMIN);
 	if (m->m_len < i && (m = m_pullup(m, i)) == NULL)  {
 		//ICMPSTAT_INC(icps_tooshort);
 		return (IPPROTO_DONE);
@@ -178,62 +178,72 @@ icmp_input_hook(struct mbuf **mp, int *offp, int proto)
 		goto freeit;
 	}
 	m->m_len += hlen;
-    m->m_data -= hlen;
-    
-    switch(itp->ic_type)
-    {
-        case ICMP_ECHOREPLY:
-        case ICMP_ECHO:
+	m->m_data -= hlen;
+	
+	switch(itp->ic_type)
+	{
+		case ICMP_ECHOREPLY:
+		case ICMP_ECHO:
 
-            if (m->m_len < ihlen) {
-                /* Insufficient data to be an ICMPTUN header, do standard
-                 * ICMP processing */
-                printf("short, goto dfl: %d %d\n", m->m_len, ihlen);
-                goto dfl;
-            }
-            
-            if (itp->tun_ver != ICMPTUN_VERSION) {
-                /* Wrong protocol version, do standard ICMP processing */
-                printf("unexpected version 0x%x, goto dfl\n", itp->tun_ver);
-                goto dfl;
-            }
+			if (m->m_len < ihlen) {
+				/* Insufficient data to be an ICMPTUN header, do standard
+				 * ICMP processing */
+				printf("short, goto dfl: %d %d\n", m->m_len, ihlen);
+				goto dfl;
+			}
+			
+			if (itp->tun_ver != ICMPTUN_VERSION) {
+				/* Wrong protocol version, do standard ICMP processing */
+				printf("unexpected version 0x%x, goto dfl\n", itp->tun_ver);
+				goto dfl;
+			}
 
-            /* We got the correct version, assume it is an ICMPTUN packet
-             * and checksum the payload to determine if it actually is. */
-            m->m_len -= ihlen;
-            m->m_data += ihlen;
-            csum = in_cksum(m, icmptunlen);
-            m->m_len += ihlen;
-            m->m_data -= ihlen;
-            
-            if (csum != itp->tun_cksum) {
-                /* Invalid checksum, do standard ICMP processing */
-                printf("invalid payload checksum, goto dfl\n");
-                goto dfl;
-            }
-            
-            /* OK, we're good here, we got ICMPTUN data. Extract the tunnel
-             * key and send the payload to the correct interface. */
-            tun_ident = ntohs(itp->ic_ident);
-            ifp = icmptun_ifp[tun_ident];
-            if (ifp == NULL) {
-                printf("no interface assigned to ident%d\n", tun_ident);
-                goto freeit;
-            }
-            
-            return icmptun_input(m, ihlen, htons(itp->tun_proto), ifp);
-            break;
+			/* We got the correct version, assume it is an ICMPTUN packet
+			 * and checksum the payload to determine if it actually is. */
+			m->m_len -= ihlen;
+			m->m_data += ihlen;
+			csum = in_cksum(m, icmptunlen);
+			m->m_len += ihlen;
+			m->m_data -= ihlen;
+			
+			if (csum != itp->tun_cksum) {
+				/* Invalid checksum, do standard ICMP processing */
+				printf("invalid payload checksum, goto dfl\n");
+				goto dfl;
+			}
+			
+			/* Echo requests are padded with ICMPTUN_ECHO_PADDING whereas
+			 * echo replies are padded with zeros. If we receive a reply
+			 * padded with ICMPTUN_ECHO_PADDING the remote is just replying
+			 * to pings and likely not configured. */
+			if ( (itp->ic_type == ICMP_ECHOREPLY) &&
+				 (itp->tun_pad == htons(ICMPTUN_ECHO_PADDING) ) ) {
+				printf("remote probably not configured\n");
+				goto freeit;
+			}
 
-        default:
-            goto dfl;
-    }
+			/* OK, we're good here, we got ICMPTUN data. Extract the tunnel
+			 * key and send the payload to the correct interface. */
+			tun_ident = ntohs(itp->ic_ident);
+			ifp = icmptun_ifp[tun_ident];
+			if (ifp == NULL) {
+				printf("no interface assigned to ident%d\n", tun_ident);
+				goto freeit;
+			}
+			
+			return icmptun_input(m, ihlen, htons(itp->tun_proto), ifp);
+			break;
+
+		default:
+			goto dfl;
+	}
 
 dfl:
-    return icmp_input(mp, offp, proto);
+	return icmp_input(mp, offp, proto);
 
 freeit:
 	m_freem(m);
-    return (IPPROTO_DONE);
+	return (IPPROTO_DONE);
 }
 
 static int
@@ -287,21 +297,21 @@ icmptun_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	u_short tun_ident;
 	int error;
 	
-    switch (cmd) {
-    	case SIOCSIFMTU:
-		    if (ifr->ifr_mtu < 576)
-			    return (EINVAL);
-		    ifp->if_mtu = ifr->ifr_mtu;
-		    return (0);
-	    case SIOCSIFADDR:
-		    ifp->if_flags |= IFF_UP;
-    	case SIOCSIFFLAGS:
-	    case SIOCADDMULTI:
-	    case SIOCDELMULTI:
-		    return (0);
-    }
-    
-    sx_xlock(&icmptun_ioctl_sx);
+	switch (cmd) {
+		case SIOCSIFMTU:
+			if (ifr->ifr_mtu < 576)
+				return (EINVAL);
+			ifp->if_mtu = ifr->ifr_mtu;
+			return (0);
+		case SIOCSIFADDR:
+			ifp->if_flags |= IFF_UP;
+		case SIOCSIFFLAGS:
+		case SIOCADDMULTI:
+		case SIOCDELMULTI:
+			return (0);
+	}
+	
+	sx_xlock(&icmptun_ioctl_sx);
 	sc = ifp->if_softc;
 	if (sc == NULL) {
 		error = ENXIO;
@@ -310,84 +320,84 @@ icmptun_ioctl(struct ifnet *ifp, u_long cmd, caddr_t data)
 	
 	error = 0;
 	switch (cmd) {
-	    case SIOCDIFPHYADDR:
-		    if (sc->icmptun_family == 0)
-			    break;
-		    //gre_delete_tunnel(sc);
-		    break;
+		case SIOCDIFPHYADDR:
+			if (sc->icmptun_family == 0)
+				break;
+			//gre_delete_tunnel(sc);
+			break;
 
-	    case SIOCSIFPHYADDR:
-	    case SIOCGIFPSRCADDR:
-	    case SIOCGIFPDSTADDR:
-		    error = in_icmptun_ioctl(sc, cmd, data);
-		    break;
+		case SIOCSIFPHYADDR:
+		case SIOCGIFPSRCADDR:
+		case SIOCGIFPDSTADDR:
+			error = in_icmptun_ioctl(sc, cmd, data);
+			break;
 
-	    case SIOCSIFPHYADDR_IN6:
-	    case SIOCGIFPSRCADDR_IN6:
-	    case SIOCGIFPDSTADDR_IN6:
-		    error = EOPNOTSUPP;//in6_gre_ioctl(sc, cmd, data);
-		    break;
-		    
+		case SIOCSIFPHYADDR_IN6:
+		case SIOCGIFPSRCADDR_IN6:
+		case SIOCGIFPDSTADDR_IN6:
+			error = EOPNOTSUPP;//in6_gre_ioctl(sc, cmd, data);
+			break;
+			
 		case SIOCGTUNFIB:
-		    ifr->ifr_fib = sc->icmptun_fibnum;
-		    break;
-	    
-	    case SIOCSTUNFIB:
-		    if (ifr->ifr_fib >= rt_numfibs)
-			    error = EINVAL;
-		    else
-			    sc->icmptun_fibnum = ifr->ifr_fib;
-            break;
+			ifr->ifr_fib = sc->icmptun_fibnum;
+			break;
+		
+		case SIOCSTUNFIB:
+			if (ifr->ifr_fib >= rt_numfibs)
+				error = EINVAL;
+			else
+				sc->icmptun_fibnum = ifr->ifr_fib;
+			break;
 
-        /* Here we are reusing the same ioctls of if_gre. In that
-         * way we can abuse ifconfig to set the tunnel identifier. */
-        case GRESKEY:
-            if ((error = copyin(ifr_data_get_ptr(ifr), &opt, sizeof(opt))) != 0)
-                break;
-            
-            if (opt >= ICMPTUNS_MAX) {
-                error = EINVAL;
-                break;
-            }
-            
-            tun_ident = (opt & 0xFFFF);
-            if ( icmptun_ifp[ tun_ident ] != NULL ) {
-                printf("%s: ioctl(): key %d already in use by another tunnel\n",
-                    ifp->if_xname, tun_ident);
-                error = EINVAL;
-                break;
-            }
+		/* Here we are reusing the same ioctls of if_gre. In that
+		 * way we can abuse ifconfig to set the tunnel identifier. */
+		case GRESKEY:
+			if ((error = copyin(ifr_data_get_ptr(ifr), &opt, sizeof(opt))) != 0)
+				break;
+			
+			if (opt >= ICMPTUNS_MAX) {
+				error = EINVAL;
+				break;
+			}
+			
+			tun_ident = (opt & 0xFFFF);
+			if ( icmptun_ifp[ tun_ident ] != NULL ) {
+				printf("%s: ioctl(): key %d already in use by another tunnel\n",
+					ifp->if_xname, tun_ident);
+				error = EINVAL;
+				break;
+			}
 
-            icmptun_ifp[ sc->icmptun_ident ] = NULL;
-            sc->icmptun_ident = tun_ident;
-            icmptun_ifp[ sc->icmptun_ident ] = ifp;
-            break;
-            
-        case GREGKEY:
-            opt = sc->icmptun_ident;
-            error = copyout(&opt, ifr_data_get_ptr(ifr), sizeof(opt));
-            break;
-            
-        default:
-            error = EINVAL;
-            break;
-    }
+			icmptun_ifp[ sc->icmptun_ident ] = NULL;
+			sc->icmptun_ident = tun_ident;
+			icmptun_ifp[ sc->icmptun_ident ] = ifp;
+			break;
+			
+		case GREGKEY:
+			opt = sc->icmptun_ident;
+			error = copyout(&opt, ifr_data_get_ptr(ifr), sizeof(opt));
+			break;
+			
+		default:
+			error = EINVAL;
+			break;
+	}
 
-    if (error == 0)
-    {
-        if_link_state_change(ifp, LINK_STATE_UP);
-    }
+	if (error == 0)
+	{
+		if_link_state_change(ifp, LINK_STATE_UP);
+	}
 
 end:
-    sx_xunlock(&icmptun_ioctl_sx);
-    return (error);
+	sx_xunlock(&icmptun_ioctl_sx);
+	return (error);
 }
 
 static int
 icmptun_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
    struct route *ro)
 {
-    printf("%s\n", __FUNCTION__);
+	printf("%s\n", __FUNCTION__);
 	uint32_t af;
 
 	if (dst->sa_family == AF_UNSPEC)
@@ -406,14 +416,16 @@ icmptun_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 static int
 icmptun_transmit(struct ifnet *ifp, struct mbuf *m)
 {
-    printf("%s\n", __FUNCTION__);
-    
-    uint32_t af = m->m_pkthdr.csum_data;
-    BPF_MTAP2(ifp, &af, sizeof(af), m);
-    
-    //in_icmptun_output(ifp, m, 0, 0);
-    
-    return 0;
+	printf("%s\n", __FUNCTION__);
+	
+	ICMPTUN_RLOCK();
+	uint32_t af = m->m_pkthdr.csum_data;
+	BPF_MTAP2(ifp, &af, sizeof(af), m);
+	
+	in_icmptun_output(ifp, m, 0, 0);
+	
+	ICMPTUN_RUNLOCK();
+	return 0;
 }
 
 int
@@ -426,40 +438,40 @@ icmptun_input(struct mbuf *m, int off, int proto, void *arg)
 	if (ifp == NULL) {
 		m_freem(m);
 		return (IPPROTO_DONE);
-    }
-    
-    m_adj(m, off);
-    m->m_pkthdr.rcvif = ifp;
-    m_clrprotoflags(m);
-    switch (proto) {
-        case IPPROTO_IPV4:
-            printf("IPPROTO_IPV4 -> AF_INET\n");
-            af = AF_INET;
-            isr = NETISR_IP;
-            break;
-            
-        case IPPROTO_IPV6:
-            printf("IPPROTO_IPV6 -> AF_INET6\n");
-            af = AF_INET6;
-            isr = NETISR_IPV6;
-            break;
-            
-        default:
-            printf("invalid proto %d, dropping\n", proto);
-            m_freem(m);
-            goto drop;
-    }
+	}
+	
+	m_adj(m, off);
+	m->m_pkthdr.rcvif = ifp;
+	m_clrprotoflags(m);
+	switch (proto) {
+		case IPPROTO_IPV4:
+			printf("IPPROTO_IPV4 -> AF_INET\n");
+			af = AF_INET;
+			isr = NETISR_IP;
+			break;
+			
+		case IPPROTO_IPV6:
+			printf("IPPROTO_IPV6 -> AF_INET6\n");
+			af = AF_INET6;
+			isr = NETISR_IPV6;
+			break;
+			
+		default:
+			printf("invalid proto %d, dropping\n", proto);
+			m_freem(m);
+			goto drop;
+	}
 
-    BPF_MTAP2(ifp, &af, sizeof(af), m);
-    if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
+	BPF_MTAP2(ifp, &af, sizeof(af), m);
+	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 	if_inc_counter(ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len);
 	M_SETFIB(m, ifp->if_fib);
 	netisr_dispatch(isr, m);
 	return (IPPROTO_DONE);
 
 drop:
-    if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
-    return (IPPROTO_DONE);
+	if_inc_counter(ifp, IFCOUNTER_IERRORS, 1);
+	return (IPPROTO_DONE);
 }
 static void
 icmptun_qflush(struct ifnet *ifp __unused)
@@ -470,19 +482,19 @@ icmptun_modevent(module_t mod, int type, void *data)
 {
 
 	switch (type) {
-	    case MOD_LOAD:
-	        bzero(icmptun_ifp, ICMPTUNS_MAX*sizeof(struct ifnet *));
-	        inetsw[ip_protox[IPPROTO_ICMP]].pr_input = icmp_input_hook;
-	        printf("if_icmptun driver loaded\n");
-	        break;
+		case MOD_LOAD:
+			bzero(icmptun_ifp, ICMPTUNS_MAX*sizeof(struct ifnet *));
+			inetsw[ip_protox[IPPROTO_ICMP]].pr_input = icmp_input_hook;
+			printf("if_icmptun driver loaded\n");
+			break;
 
-	    case MOD_UNLOAD:
-	        inetsw[ip_protox[IPPROTO_ICMP]].pr_input = icmp_input;
-	        printf("if_icmptun driver unloaded\n");
-		    break;
+		case MOD_UNLOAD:
+			inetsw[ip_protox[IPPROTO_ICMP]].pr_input = icmp_input;
+			printf("if_icmptun driver unloaded\n");
+			break;
 	
-	    default:
-		    return (EOPNOTSUPP);
+		default:
+			return (EOPNOTSUPP);
 	}
 	return (0);
 }
