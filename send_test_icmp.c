@@ -1,3 +1,33 @@
+/*-
+ * IP-over-ICMP tunnel interface.
+ *
+ * Matteo `datafl4sh` Cicuttin (C) 2021.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the Author nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
+
 #include <stdio.h>
 #include <string.h>
 #include <sys/param.h>
@@ -59,17 +89,27 @@ in_cksum_priv(void *parg, int nbytes)
 	return(answer);
 }
 
+#define TSTPKT_LEN 46
 const u_char *tstpkt =
     "\x45\x00\x00\x2e\x2b\x6d\x40\x00\x40\x01\x96\x69\xac\x10\x10\x41" \
     "\xac\x10\x10\x97\x08\x00\xbb\x36\xca\xfe\x42\x43\x42\xca\xde\xad" \
     "\x9b\x96\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19";
 
+#define TSTPKT2_LEN 60
 const u_char *tstpkt2 =
     "\x45\x10\x00\x3c\x5d\x2a\x40\x00\x40\x06\x64\x89\xac\x10\x10\x41" \
     "\xac\x10\x10\x97\xa7\x70\x00\x17\xf0\x03\x7d\xba\x00\x00\x00\x00" \
     "\xa0\x02\xfa\xf0\x79\x27\x00\x00\x02\x04\x05\xb4\x04\x02\x08\x0a"
     "\x50\x70\x7a\xae\x00\x00\x00\x00\x01\x03\x03\x0a";
 
+#define TSTPKT3_LEN 84
+const u_char *tstpkt3 =
+    "\x45\x00\x00\x54\x91\x13\x40\x00\x40\x01\x30\x9d\xac\x10\x10\x41" \
+    "\xac\x10\x10\x97\x08\x00\x54\x68\x68\xe9\x00\x01\x3d\xc3\x3f\x60" \
+    "\x00\x00\x00\x00\xf8\xb6\x06\x00\x00\x00\x00\x00\x10\x11\x12\x13" \
+    "\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x20\x21\x22\x23" \
+    "\x24\x25\x26\x27\x28\x29\x2a\x2b\x2c\x2d\x2e\x2f\x30\x31\x32\x33" \
+    "\x34\x35\x36\x37";
 
 int main(int argc, const char *argv[])
 {
@@ -108,9 +148,9 @@ int main(int argc, const char *argv[])
     icmptunh->tun_flags = 0xca;
     icmptunh->tun_proto = htons(4);
 
-    size_t datalen = 60;
+    size_t datalen = TSTPKT3_LEN;
     u_char *data = pktbuf + sizeof(struct icmptun);
-    memcpy(data, tstpkt2, datalen);
+    memcpy(data, tstpkt3, datalen);
     icmptunh->tun_cksum = in_cksum_priv(data, datalen);
 
     size_t sz = sizeof(struct icmptun) + datalen;
