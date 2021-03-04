@@ -66,6 +66,8 @@ struct icmptun {
 
 #ifdef _KERNEL
 
+#define ICMPTUNPRINTFS
+
 struct ip;
 struct ip6_hdr;
 
@@ -75,8 +77,8 @@ struct icmptunip {
 };
 
 struct icmptun_softc {
-	struct ifnet    *icmptun_ifp;
-	int			    icmptun_family;
+	struct ifnet	*icmptun_ifp;
+	int				icmptun_family;
 	u_int			icmptun_fibnum;
 	u_int			icmptun_hlen;
 	u_short			icmptun_ident;
@@ -101,10 +103,10 @@ MALLOC_DECLARE(M_ICMPTUN);
 #define	ICMPTUN_WAIT() 		epoch_wait_preempt(net_epoch_preempt)
 
 #define	GREGKEY		_IOWR('i', 107, struct ifreq)
-#define	GRESKEY	    _IOW('i', 108, struct ifreq)
+#define	GRESKEY		_IOW('i', 108, struct ifreq)
 
-int     in_icmptun_ioctl(struct icmptun_softc *, u_long, caddr_t);
 int     icmptun_input(struct mbuf *, int, int, void *);
+int     in_icmptun_ioctl(struct icmptun_softc *, u_long, caddr_t);
 int     in_icmptun_output(struct ifnet *, struct mbuf *, int, uint8_t);
 
 #endif /* _KERNEL */

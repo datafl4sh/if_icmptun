@@ -83,6 +83,11 @@
 
 #include "if_icmptun.h"
 
+#ifdef ICMPTUNPRINTFS
+static int icmptunprintf;
+SYSCTL_INT(_debug, OID_AUTO, if_icmptun_printf, CTLFLAG_RW, &icmptunprintf, 0, "");
+#endif
+
 static const char icmptunname[] = "icmptun";
 MALLOC_DEFINE(M_ICMPTUN, icmptunname, "IP over ICMP Tunnel");
 
@@ -98,11 +103,13 @@ static void	icmptun_qflush(struct ifnet *);
 static int	icmptun_transmit(struct ifnet *, struct mbuf *);
 static int	icmptun_ioctl(struct ifnet *, u_long, caddr_t);
 static int	icmptun_output(struct ifnet *, struct mbuf *,
-			const struct sockaddr *, struct route *);
+				const struct sockaddr *, struct route *);
 static void	icmptun_delete_tunnel(struct icmptun_softc *);
 
 extern struct protosw inetsw[];
 
+/* This table is used to retrieve the correct ifp structure (and thus the
+ * correct input interface) when an ICMPTUN packet is received. */
 static struct ifnet *icmptun_ifp[ICMPTUNS_MAX];
 
 static void
@@ -136,6 +143,48 @@ vnet_icmptun_uninit(const void *unused __unused)
 }
 VNET_SYSUNINIT(vnet_icmptun_uninit, SI_SUB_PROTO_IFATTACHDOMAIN, SI_ORDER_ANY,
 	vnet_icmptun_uninit, NULL);
+
+static int
+icmptun_clone_create(struct if_clone *ifc, int unit, caddr_t params)
+{
+	struct icmptun_softc *sc;
+
+	sc = malloc(sizeof(struct icmptun_softc), M_ICMPTUN, M_WAITOK | M_ZERO);
+	sc->icmptun_fibnum = curthread->td_proc->p_fibnum;
+	ICMPTUN2IFP(sc) = if_alloc(IFT_TUNNEL);
+	ICMPTUN2IFP(sc)->if_softc = sc;
+	if_initname(ICMPTUN2IFP(sc), icmptunname, unit);
+
+	ICMPTUN2IFP(sc)->if_mtu = ICMPTUN_MTU;
+	ICMPTUN2IFP(sc)->if_flags = IFF_POINTOPOINT|IFF_MULTICAST;
+	ICMPTUN2IFP(sc)->if_output = icmptun_output;
+	ICMPTUN2IFP(sc)->if_ioctl = icmptun_ioctl;
+	ICMPTUN2IFP(sc)->if_transmit = icmptun_transmit;
+	ICMPTUN2IFP(sc)->if_qflush = icmptun_qflush;
+	ICMPTUN2IFP(sc)->if_capabilities |= IFCAP_LINKSTATE;
+	ICMPTUN2IFP(sc)->if_capenable |= IFCAP_LINKSTATE;
+	if_attach(ICMPTUN2IFP(sc));
+	bpfattach(ICMPTUN2IFP(sc), DLT_NULL, sizeof(u_int32_t));
+	return (0);
+}
+
+static void
+icmptun_clone_destroy(struct ifnet *ifp)
+{
+	struct icmptun_softc *sc;
+
+	sx_xlock(&icmptun_ioctl_sx);
+	sc = ifp->if_softc;
+	//gre_delete_tunnel(sc);
+	bpfdetach(ifp);
+	if_detach(ifp);
+	ifp->if_softc = NULL;
+	sx_xunlock(&icmptun_ioctl_sx);
+
+	ICMPTUN_WAIT();
+	if_free(ifp);
+	free(sc, M_ICMPTUN);
+}
 
 static int
 icmp_input_hook(struct mbuf **mp, int *offp, int proto)
@@ -188,13 +237,21 @@ icmp_input_hook(struct mbuf **mp, int *offp, int proto)
 			if (m->m_len < ihlen) {
 				/* Insufficient data to be an ICMPTUN header, do standard
 				 * ICMP processing */
-				printf("short, goto dfl: %d %d\n", m->m_len, ihlen);
+#ifdef ICMPTUNPRINTFS
+				if (icmptunprintf) {
+					printf("short, goto dfl: %d %d\n", m->m_len, ihlen);
+				}
+#endif
 				goto dfl;
 			}
 			
 			if (itp->tun_ver != ICMPTUN_VERSION) {
 				/* Wrong protocol version, do standard ICMP processing */
-				printf("unexpected version 0x%x, goto dfl\n", itp->tun_ver);
+#ifdef ICMPTUNPRINTFS
+				if (icmptunprintf) {
+					printf("unexpected version 0x%x, goto dfl\n", itp->tun_ver);
+				}
+#endif
 				goto dfl;
 			}
 
@@ -208,7 +265,11 @@ icmp_input_hook(struct mbuf **mp, int *offp, int proto)
 			
 			if (csum != itp->tun_cksum) {
 				/* Invalid checksum, do standard ICMP processing */
-				printf("invalid payload checksum, goto dfl\n");
+#ifdef ICMPTUNPRINTFS
+				if (icmptunprintf) {
+					printf("invalid payload checksum, goto dfl\n");
+				}
+#endif
 				goto dfl;
 			}
 			
@@ -218,7 +279,11 @@ icmp_input_hook(struct mbuf **mp, int *offp, int proto)
 			 * to pings and likely not configured. */
 			if ( (itp->ic_type == ICMP_ECHOREPLY) &&
 				 (itp->tun_pad == htons(ICMPTUN_ECHO_PADDING) ) ) {
-				printf("remote probably not configured\n");
+#ifdef ICMPTUNPRINTFS
+				if (icmptunprintf) {
+					printf("remote probably not configured\n");
+				}
+#endif
 				goto freeit;
 			}
 
@@ -227,7 +292,11 @@ icmp_input_hook(struct mbuf **mp, int *offp, int proto)
 			tun_ident = ntohs(itp->ic_ident);
 			ifp = icmptun_ifp[tun_ident];
 			if (ifp == NULL) {
-				printf("no interface assigned to ident%d\n", tun_ident);
+#ifdef ICMPTUNPRINTFS
+				if (icmptunprintf) {
+					printf("no interface assigned to ident%d\n", tun_ident);
+				}
+#endif
 				goto freeit;
 			}
 			
@@ -244,48 +313,6 @@ dfl:
 freeit:
 	m_freem(m);
 	return (IPPROTO_DONE);
-}
-
-static int
-icmptun_clone_create(struct if_clone *ifc, int unit, caddr_t params)
-{
-	struct icmptun_softc *sc;
-
-	sc = malloc(sizeof(struct icmptun_softc), M_ICMPTUN, M_WAITOK | M_ZERO);
-	sc->icmptun_fibnum = curthread->td_proc->p_fibnum;
-	ICMPTUN2IFP(sc) = if_alloc(IFT_TUNNEL);
-	ICMPTUN2IFP(sc)->if_softc = sc;
-	if_initname(ICMPTUN2IFP(sc), icmptunname, unit);
-
-	ICMPTUN2IFP(sc)->if_mtu = ICMPTUN_MTU;
-	ICMPTUN2IFP(sc)->if_flags = IFF_POINTOPOINT|IFF_MULTICAST;
-	ICMPTUN2IFP(sc)->if_output = icmptun_output;
-	ICMPTUN2IFP(sc)->if_ioctl = icmptun_ioctl;
-	ICMPTUN2IFP(sc)->if_transmit = icmptun_transmit;
-	ICMPTUN2IFP(sc)->if_qflush = icmptun_qflush;
-	ICMPTUN2IFP(sc)->if_capabilities |= IFCAP_LINKSTATE;
-	ICMPTUN2IFP(sc)->if_capenable |= IFCAP_LINKSTATE;
-	if_attach(ICMPTUN2IFP(sc));
-	bpfattach(ICMPTUN2IFP(sc), DLT_NULL, sizeof(u_int32_t));
-	return (0);
-}
-
-static void
-icmptun_clone_destroy(struct ifnet *ifp)
-{
-	struct icmptun_softc *sc;
-
-	sx_xlock(&icmptun_ioctl_sx);
-	sc = ifp->if_softc;
-	//gre_delete_tunnel(sc);
-	bpfdetach(ifp);
-	if_detach(ifp);
-	ifp->if_softc = NULL;
-	sx_xunlock(&icmptun_ioctl_sx);
-
-	ICMPTUN_WAIT();
-	if_free(ifp);
-	free(sc, M_ICMPTUN);
 }
 
 static int
@@ -397,7 +424,6 @@ static int
 icmptun_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
    struct route *ro)
 {
-	printf("%s\n", __FUNCTION__);
 	uint32_t af;
 
 	if (dst->sa_family == AF_UNSPEC)
@@ -407,7 +433,7 @@ icmptun_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 	/*
 	 * Now save the af in the inbound pkt csum data, this is a cheat since
 	 * we are using the inbound csum_data field to carry the af over to
-	 * the gre_transmit() routine, avoiding using yet another mtag.
+	 * the icmptun_transmit() routine, avoiding using yet another mtag.
 	 */
 	m->m_pkthdr.csum_data = af;
 	return (ifp->if_transmit(ifp, m));
@@ -416,8 +442,6 @@ icmptun_output(struct ifnet *ifp, struct mbuf *m, const struct sockaddr *dst,
 static int
 icmptun_transmit(struct ifnet *ifp, struct mbuf *m)
 {
-	printf("%s\n", __FUNCTION__);
-	
 	ICMPTUN_RLOCK();
 	uint32_t af = m->m_pkthdr.csum_data;
 	BPF_MTAP2(ifp, &af, sizeof(af), m);
@@ -485,12 +509,10 @@ icmptun_modevent(module_t mod, int type, void *data)
 		case MOD_LOAD:
 			bzero(icmptun_ifp, ICMPTUNS_MAX*sizeof(struct ifnet *));
 			inetsw[ip_protox[IPPROTO_ICMP]].pr_input = icmp_input_hook;
-			printf("if_icmptun driver loaded\n");
 			break;
 
 		case MOD_UNLOAD:
 			inetsw[ip_protox[IPPROTO_ICMP]].pr_input = icmp_input;
-			printf("if_icmptun driver unloaded\n");
 			break;
 	
 		default:

@@ -127,7 +127,6 @@ in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
 		}
 		sc->icmptun_family = AF_INET;
 		sc->icmptun_iphdr = ip;
-		printf("sc->icmptun_iphdr: %p\n", ip);
 		//in_gif_attach(sc);
 		in_icmptun_set_running(sc);
 		break;
@@ -160,7 +159,7 @@ in_icmptun_output(struct ifnet *ifp, struct mbuf *m, int proto, uint8_t ecn)
 	
 	u_short payload_csum = in_cksum(m, m->m_pkthdr.len);
 
-	/* prepend new IP header */
+	/* prepend new IP and ICMPTUN headers */
 	MPASS(in_epoch(net_epoch_preempt));
 	len = sizeof(struct icmptunip);
 
@@ -173,13 +172,14 @@ in_icmptun_output(struct ifnet *ifp, struct mbuf *m, int proto, uint8_t ecn)
 	MPASS(sc->icmptun_family == AF_INET);
 	bcopy(sc->icmptun_iphdr, &itih->tun_ip, sizeof(struct ip));
 	
-	itih->tun_icmptun.ic_type = 0;
+	itih->tun_icmptun.ic_type = 8;
 	itih->tun_icmptun.ic_code = 0;
-	itih->tun_icmptun.ic_ident = htons(1010);
+	itih->tun_icmptun.ic_ident = htons(sc->icmptun_ident);
 	itih->tun_icmptun.ic_seq = 0x8484;
 	itih->tun_icmptun.ic_cksum = 0;
 
 	itih->tun_icmptun.tun_ver = ICMPTUN_VERSION;
+	itih->tun_icmptun.tun_flags = 0;
 	itih->tun_icmptun.tun_proto = htons(4);//proto;
 	itih->tun_icmptun.tun_pad = htons(ICMPTUN_ECHO_PADDING);
 	itih->tun_icmptun.tun_cksum = payload_csum;
@@ -195,31 +195,5 @@ in_icmptun_output(struct ifnet *ifp, struct mbuf *m, int proto, uint8_t ecn)
 	return (ip_output(m, NULL, NULL, 0, NULL, NULL));
 }
 
-static int
-in_icmptun_input(struct mbuf *m, int off, int proto, void *arg)
-{
-	struct icmptun_softc *sc = arg;
-	struct ifnet *icmptunp;
-	struct ip *ip;
-	uint8_t ecn;
-
-	//NET_EPOCH_ASSERT();
-	if (sc == NULL) {
-		m_freem(m);
-		//KMOD_IPSTAT_INC(ips_nogif);
-		return (IPPROTO_DONE);
-	}
-	icmptunp = ICMPTUN2IFP(sc);
-	if ((icmptunp->if_flags & IFF_UP) != 0) {
-		ip = mtod(m, struct ip *);
-		ecn = ip->ip_tos;
-		m_adj(m, off);
-		//icmptun_input(m, icmptunp, proto, ecn);
-	} else {
-		m_freem(m);
-		//KMOD_IPSTAT_INC(ips_nogif);
-	}
-	return (IPPROTO_DONE);
-}
 
 
