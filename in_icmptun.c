@@ -56,6 +56,9 @@
 #include <netinet/ip_ecn.h>
 #include <netinet/in_fib.h>
 
+#include <netinet/ip_icmp.h>
+#include <netinet/icmp_var.h>
+
 #ifdef INET6
 #include <netinet/ip6.h>
 #endif
@@ -79,7 +82,9 @@ in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
 	struct ifreq *ifr = (struct ifreq *)data;
 	struct sockaddr_in *dst, *src;
 	struct ip *ip;
+	struct icmptun *icmptunh;
 	int error;
+	u_long sa, da;
 
 	/* NOTE: we are protected with icmptun_ioctl_sx lock */
 	error = EINVAL;
@@ -127,6 +132,35 @@ in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
 		}
 		sc->icmptun_family = AF_INET;
 		sc->icmptun_iphdr = ip;
+
+		sa = src->sin_addr.s_addr;
+		da = dst->sin_addr.s_addr;
+
+		if (sa == da) {
+			error = EADDRNOTAVAIL;
+			break;
+		}
+
+		icmptunh = malloc(sizeof(struct icmptun), M_ICMPTUN,  M_WAITOK | M_ZERO);
+
+		icmptunh->ic_code = 0;
+		icmptunh->ic_ident = htons(sc->icmptun_ident);
+		icmptunh->ic_seq = 0;
+		icmptunh->tun_ver = ICMPTUN_VERSION;
+		icmptunh->tun_flags = 0;
+		icmptunh->tun_proto = htons(4);
+	
+		/* If we are the tunnel side with smaller address use ICMP_ECHO
+		 * otherwise use ICMP_ECHOREPLY packets. */
+		if (sa < da) {
+			icmptunh->ic_type = ICMP_ECHO;
+			icmptunh->tun_pad = htons(ICMPTUN_ECHO_PADDING);
+		} else {
+			icmptunh->ic_type = ICMP_ECHOREPLY;
+			icmptunh->tun_pad = 0;
+		}
+		sc->icmptun_tunhdr = icmptunh;
+
 		//in_gif_attach(sc);
 		in_icmptun_set_running(sc);
 		break;
@@ -171,17 +205,12 @@ in_icmptun_output(struct ifnet *ifp, struct mbuf *m, int proto, uint8_t ecn)
 
 	MPASS(sc->icmptun_family == AF_INET);
 	bcopy(sc->icmptun_iphdr, &itih->tun_ip, sizeof(struct ip));
-	
-	itih->tun_icmptun.ic_type = 8;
-	itih->tun_icmptun.ic_code = 0;
+	bcopy(sc->icmptun_tunhdr, &itih->tun_icmptun, sizeof(struct icmptun));
+
 	itih->tun_icmptun.ic_ident = htons(sc->icmptun_ident);
-	itih->tun_icmptun.ic_seq = 0x8484;
+	itih->tun_icmptun.ic_seq = sc->icmptun_seq++; /* This is trash (and it should be) */
 	itih->tun_icmptun.ic_cksum = 0;
 
-	itih->tun_icmptun.tun_ver = ICMPTUN_VERSION;
-	itih->tun_icmptun.tun_flags = 0;
-	itih->tun_icmptun.tun_proto = htons(4);//proto;
-	itih->tun_icmptun.tun_pad = htons(ICMPTUN_ECHO_PADDING);
 	itih->tun_icmptun.tun_cksum = payload_csum;
 
 	itih->tun_icmptun.ic_cksum =

@@ -66,7 +66,7 @@ struct icmptun {
 
 #ifdef _KERNEL
 
-#define ICMPTUNPRINTFS
+//#define ICMPTUNPRINTFS
 
 struct ip;
 struct ip6_hdr;
@@ -80,13 +80,14 @@ struct icmptun_softc {
 	struct ifnet	*icmptun_ifp;
 	int				icmptun_family;
 	u_int			icmptun_fibnum;
-	u_int			icmptun_hlen;
-	u_short			icmptun_ident;
-	u_short			icmptun_pktype;
+	u_short 		icmptun_ident;
+	u_short 		icmptun_seq;
 	union {
 		struct ip       *iphdr;
 		struct ip6_hdr	*ip6hdr;
 	} icmptun_uhdr;
+
+	struct icmptun 		*icmptun_tunhdr;
 
 	CK_LIST_ENTRY(icmptun_softc) chain;
 	CK_LIST_ENTRY(icmptun_softc) srchash;
