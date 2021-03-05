@@ -133,8 +133,8 @@ in_icmptun_ioctl(struct icmptun_softc *sc, u_long cmd, caddr_t data)
 		sc->icmptun_family = AF_INET;
 		sc->icmptun_iphdr = ip;
 
-		sa = src->sin_addr.s_addr;
-		da = dst->sin_addr.s_addr;
+		sa = ntohl(src->sin_addr.s_addr);
+		da = ntohl(dst->sin_addr.s_addr);
 
 		if (sa == da) {
 			error = EADDRNOTAVAIL;
