@@ -17,7 +17,7 @@ and/or your security practices.
 
 The documentation will be better in the near future, but for now:
 
- * You are too smart to figure out alone how to compile the thing
+ * You are too smart to not figure out alone how to compile the thing
  * Install the module with `kldload ./if_icmptun.ko`
  * Remove the module with `kldunload if_icmptun.ko`
  * Create interfaces with `ifconfig icmptunX create` where `X` is the interface number
